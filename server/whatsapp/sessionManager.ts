@@ -67,35 +67,40 @@ async function iniciarRobo() {
     }
   });
 
-  // 👇 AQUI COMEÇA O CÉREBRO DO FUNIL X1 👇
   socket.ev.on('messages.upsert', async ({ messages, type }) => {
     if (type !== 'notify') return;
     const msg = messages[0];
     
     if (!msg.key.fromMe && msg.message) {
         const remoteJid = msg.key.remoteJid!;
-        const text = msg.message.conversation || msg.message.extendedTextMessage?.text || "";
+        
+        // 👉 NOVO EXTRATOR BLINDADO (Acha o texto em qualquer lugar)
+        const text = msg.message.conversation || 
+                     msg.message.extendedTextMessage?.text || 
+                     msg.message.ephemeralMessage?.message?.conversation || 
+                     msg.message.ephemeralMessage?.message?.extendedTextMessage?.text || 
+                     "";
+
         const textoMinusculo = text.toLowerCase();
 
-        // Se o lead mandar a palavra-chave
+        // 👉 DEDO-DURO: Vai mostrar na tela preta do Render o que chegou!
+        console.log(`📩 Mensagem de ${remoteJid}: "${text}"`);
+
+        // Gatilho do Funil
         if (textoMinusculo.includes('protocolo') || textoMinusculo.includes('ativar') || textoMinusculo.includes('identidade')) {
             
-            console.log(`Disparando Funil para: ${remoteJid}`);
+            console.log(`🔥 Disparando Funil para: ${remoteJid}`);
 
-            // Simula que está digitando por 2 segundos
             await socket.sendPresenceUpdate('composing', remoteJid);
             await new Promise(r => setTimeout(r, 2000));
 
-            // Envia a primeira mensagem quebrando objeção de "cursinho"
             await socket.sendMessage(remoteJid, {
                 text: "Opa! Que bom que você chamou. O que te espera aqui não é mais aula teórica, é um Protocolo de Ativação prático. 🚀"
             });
 
-            // Simula digitando a segunda mensagem por 3 segundos
             await socket.sendPresenceUpdate('composing', remoteJid);
             await new Promise(r => setTimeout(r, 3000));
 
-            // Envia a explicação da estrutura
             await socket.sendMessage(remoteJid, {
                 text: "O *Protocolo de Identidade Real* é fundamentado em 5 estratégias estruturais que vão direto ao ponto.\n\nVocê já tentou aplicar algo prático assim antes ou é a sua primeira vez?"
             });
