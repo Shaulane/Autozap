@@ -1,14 +1,19 @@
 import makeWASocket, {
   DisconnectReason,
-  useMultiFileAuthState,
-  fetchLatestBaileysVersion
+  fetchLatestBaileysVersion,
+  initAuthCreds,
+  BufferJSON,
+  proto
 } from '@whiskeysockets/baileys';
 import { Boom } from '@hapi/boom';
 import pino from 'pino';
-import fs from 'fs';
-import path from 'path';
+import { MongoClient } from 'mongodb';
 import http from 'http';
 import QRCode from 'qrcode';
+
+// 👇 COLE O SEU LINK DO MONGODB AQUI EMBAIXO DENTRO DAS ASPAS 👇
+// Lembre-se de trocar o <password> pela sua senha real!
+const MONGO_URI = 'mongodb+srv://shaulinhu_db_user:<db_IUoGg11YKKMh2wz1>@cluster0.1thsqmb.mongodb.net/?appName=Cluster0';
 
 let qrCodeAtual = '';
 
@@ -29,18 +34,71 @@ http.createServer(async (req, res) => {
     }
   } else {
     res.writeHead(200, { 'Content-Type': 'text/html' });
-    res.end('<html style="background:#111; color:white; font-family:sans-serif; text-align:center; padding-top:50px;"><h2>✅ Robô conectado e operante 24h!</h2></html>');
+    res.end('<html style="background:#111; color:white; font-family:sans-serif; text-align:center; padding-top:50px;"><h2>✅ Robô conectado, blindado e operante 24h!</h2></html>');
   }
 }).listen(port);
 
-const sessionDir = path.resolve('./whatsapp_sessions');
+// ==========================================
+// CÉREBRO DA PERSISTÊNCIA (MONGODB)
+// ==========================================
+const mongoClient = new MongoClient(MONGO_URI);
+
+async function useMongoDBAuthState(collectionName: string) {
+  await mongoClient.connect();
+  const collection = mongoClient.db('whatsapp_api').collection(collectionName);
+
+  const writeData = async (data: any, id: string) => {
+    const dataStr = JSON.stringify(data, BufferJSON.replacer);
+    await collection.updateOne({ _id: id }, { $set: { data: dataStr } }, { upsert: true });
+  };
+
+  const readData = async (id: string) => {
+    const doc = await collection.findOne({ _id: id });
+    if (doc && doc.data) return JSON.parse(doc.data, BufferJSON.reviver);
+    return null;
+  };
+
+  const removeData = async (id: string) => {
+    await collection.deleteOne({ _id: id });
+  };
+
+  const creds = await readData('creds') || initAuthCreds();
+
+  return {
+    state: {
+      creds,
+      keys: {
+        get: async (type: string, ids: string[]) => {
+          const data: { [key: string]: any } = {};
+          await Promise.all(ids.map(async id => {
+            let value = await readData(`${type}-${id}`);
+            if (type === 'app-state-sync-key' && value) {
+              value = proto.Message.AppStateSyncKeyData.fromObject(value);
+            }
+            data[id] = value;
+          }));
+          return data;
+        },
+        set: async (data: any) => {
+          const tasks: any[] = [];
+          for (const category in data) {
+            for (const id in data[category]) {
+              const value = data[category][id];
+              const key = `${category}-${id}`;
+              tasks.push(value ? writeData(value, key) : removeData(key));
+            }
+          }
+          await Promise.all(tasks);
+        }
+      }
+    },
+    saveCreds: () => writeData(creds, 'creds')
+  };
+}
 
 async function iniciarRobo() {
-  if (!fs.existsSync(sessionDir)) {
-    fs.mkdirSync(sessionDir, { recursive: true });
-  }
-
-  const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
+  console.log('Conectando ao Banco de Dados...');
+  const { state, saveCreds } = await useMongoDBAuthState('sessoes_mentes_prosperas');
   const { version } = await fetchLatestBaileysVersion();
 
   const socket = makeWASocket({
@@ -63,7 +121,7 @@ async function iniciarRobo() {
       if (statusCode !== DisconnectReason.loggedOut) iniciarRobo();
     } else if (connection === 'open') {
       qrCodeAtual = ''; 
-      console.log('🚀 SUCESSO ABSOLUTO! WhatsApp conectado!');
+      console.log('🚀 SUCESSO ABSOLUTO! WhatsApp conectado e BLINDADO no MongoDB!');
     }
   });
 
@@ -73,8 +131,6 @@ async function iniciarRobo() {
     
     if (!msg.key.fromMe && msg.message) {
         const remoteJid = msg.key.remoteJid!;
-        
-        // 👉 NOVO EXTRATOR BLINDADO (Acha o texto em qualquer lugar)
         const text = msg.message.conversation || 
                      msg.message.extendedTextMessage?.text || 
                      msg.message.ephemeralMessage?.message?.conversation || 
@@ -82,13 +138,10 @@ async function iniciarRobo() {
                      "";
 
         const textoMinusculo = text.toLowerCase();
-
-        // 👉 DEDO-DURO: Vai mostrar na tela preta do Render o que chegou!
         console.log(`📩 Mensagem de ${remoteJid}: "${text}"`);
 
-        // Gatilho do Funil
+        // Funil Principal
         if (textoMinusculo.includes('protocolo') || textoMinusculo.includes('ativar') || textoMinusculo.includes('identidade')) {
-            
             console.log(`🔥 Disparando Funil para: ${remoteJid}`);
 
             await socket.sendPresenceUpdate('composing', remoteJid);
