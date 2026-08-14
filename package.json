@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "Robô de Vendas X1 do WhatsApp",
   "scripts": {
-    "start": "ts-node server/whatsapp/sessionManager.ts"
+    "start": "ts-node --transpile-only server/whatsapp/sessionManager.ts"
   },
   "dependencies": {
     "@whiskeysockets/baileys": "^6.7.0",
