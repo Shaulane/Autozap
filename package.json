@@ -6,8 +6,9 @@
     "start": "tsx server/whatsapp/sessionManager.ts"
   },
   "dependencies": {
-    "@whiskeysockets/baileys": "^6.7.0",
     "@hapi/boom": "^10.0.1",
+    "@whiskeysockets/baileys": "^6.7.0",
+    "mongodb": "^6.8.0",
     "pino": "^8.19.0",
     "qrcode": "^1.5.3",
     "tsx": "^4.7.0",
