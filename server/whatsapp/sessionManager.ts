@@ -1,165 +1,103 @@
-import makeWASocket, {
-  DisconnectReason,
-  fetchLatestBaileysVersion,
-  initAuthCreds,
-  BufferJSON,
-  proto
-} from '@whiskeysockets/baileys';
+import makeWASocket, { fetchLatestBaileysVersion, initAuthCreds, BufferJSON, proto } from '@whiskeysockets/baileys';
 import { Boom } from '@hapi/boom';
 import pino from 'pino';
 import { MongoClient } from 'mongodb';
-import http from 'http';
+import express from 'express';
+import cors from 'cors';
 import QRCode from 'qrcode';
 
-// 👇 COLE O SEU LINK DO MONGODB AQUI EMBAIXO DENTRO DAS ASPAS 👇
-// Lembre-se de trocar o <password> pela sua senha real!
-const MONGO_URI = 'mongodb+srv://shaulinhu_db_user:<db_IUoGg11YKKMh2wz1>@cluster0.1thsqmb.mongodb.net/?appName=Cluster0';
+const MONGO_URI = 'mongodb+srv://shaulinhu_db_user:db_IUoGg11YKKMh2wz1@cluster0.1thsqmb.mongodb.net/?appName=Cluster0';
 
 let qrCodeAtual = '';
-
 const port = process.env.PORT || 3000;
-http.createServer(async (req, res) => {
-  if (qrCodeAtual) {
-    try {
-      const imagemBase64 = await QRCode.toDataURL(qrCodeAtual);
-      res.writeHead(200, { 'Content-Type': 'text/html' });
-      res.end(`
-        <html style="background:#111; color:white; font-family:sans-serif; text-align:center; padding-top:50px;">
-          <h2>Conectar Automação Mentes Prósperas</h2>
-          <img src="${imagemBase64}" style="background:white; padding:15px; border-radius:10px; width:300px; height:300px;" />
-        </html>
-      `);
-    } catch (e) {
-      res.end('Erro ao gerar a imagem.');
-    }
-  } else {
-    res.writeHead(200, { 'Content-Type': 'text/html' });
-    res.end('<html style="background:#111; color:white; font-family:sans-serif; text-align:center; padding-top:50px;"><h2>✅ Robô conectado, blindado e operante 24h!</h2></html>');
-  }
-}).listen(port);
-
-// ==========================================
-// CÉREBRO DA PERSISTÊNCIA (MONGODB)
-// ==========================================
 const mongoClient = new MongoClient(MONGO_URI);
 
+const app = express();
+app.use(cors()); // Abre a porta para o Google AI Studio
+app.use(express.json());
+
+// Rota de Status e QR Code
+app.get('/', async (req, res) => {
+  if (qrCodeAtual) {
+    try {
+      const img = await QRCode.toDataURL(qrCodeAtual);
+      res.send(`<center><h2>Motor Mentes Prósperas</h2><img src="${img}" width="300"/></center>`);
+    } catch (e) { res.send('Erro'); }
+  } else {
+    res.send('<center><h2>✅ API Online e Robô Blindado!</h2></center>');
+  }
+});
+
+// A ROTA MÁGICA: Recebe os fluxos do seu Painel Front-end
+app.post('/api/salvar-fluxo', async (req, res) => {
+  try {
+    const { gatilho, mensagens } = req.body;
+    const db = mongoClient.db('whatsapp_api');
+    await db.collection('fluxos').updateOne(
+      { gatilho: gatilho },
+      { $set: { gatilho: gatilho, mensagens: mensagens } },
+      { upsert: true }
+    );
+    res.status(200).json({ sucesso: true });
+  } catch (erro) {
+    res.status(500).json({ sucesso: false });
+  }
+});
+
+app.listen(port, () => console.log('API Express rodando na porta ' + port));
+
+// Conexão do Baileys e MongoDB
 async function useMongoDBAuthState(collectionName: string) {
   await mongoClient.connect();
   const collection = mongoClient.db('whatsapp_api').collection(collectionName);
-
   const writeData = async (data: any, id: string) => {
-    const dataStr = JSON.stringify(data, BufferJSON.replacer);
-    await collection.updateOne({ _id: id }, { $set: { data: dataStr } }, { upsert: true });
+    await collection.updateOne({ _id: id }, { $set: { data: JSON.stringify(data, BufferJSON.replacer) } }, { upsert: true });
   };
-
   const readData = async (id: string) => {
     const doc = await collection.findOne({ _id: id });
-    if (doc && doc.data) return JSON.parse(doc.data, BufferJSON.reviver);
-    return null;
+    return doc ? JSON.parse(doc.data, BufferJSON.reviver) : null;
   };
-
-  const removeData = async (id: string) => {
-    await collection.deleteOne({ _id: id });
-  };
-
   const creds = await readData('creds') || initAuthCreds();
-
   return {
-    state: {
-      creds,
-      keys: {
-        get: async (type: string, ids: string[]) => {
-          const data: { [key: string]: any } = {};
-          await Promise.all(ids.map(async id => {
-            let value = await readData(`${type}-${id}`);
-            if (type === 'app-state-sync-key' && value) {
-              value = proto.Message.AppStateSyncKeyData.fromObject(value);
-            }
-            data[id] = value;
-          }));
-          return data;
-        },
-        set: async (data: any) => {
-          const tasks: any[] = [];
-          for (const category in data) {
-            for (const id in data[category]) {
-              const value = data[category][id];
-              const key = `${category}-${id}`;
-              tasks.push(value ? writeData(value, key) : removeData(key));
-            }
-          }
-          await Promise.all(tasks);
-        }
-      }
-    },
+    state: { creds, keys: { get: async (type: string, ids: string[]) => { const data: any = {}; await Promise.all(ids.map(async id => data[id] = await readData(`${type}-${id}`))); return data; }, set: async (data: any) => { for (const cat in data) for (const id in data[cat]) await writeData(data[cat][id], `${cat}-${id}`); } } },
     saveCreds: () => writeData(creds, 'creds')
   };
 }
 
 async function iniciarRobo() {
-  console.log('Conectando ao Banco de Dados...');
   const { state, saveCreds } = await useMongoDBAuthState('sessoes_mentes_prosperas');
   const { version } = await fetchLatestBaileysVersion();
-
-  const socket = makeWASocket({
-    version,
-    logger: pino({ level: 'silent' }) as any,
-    printQRInTerminal: false,
-    auth: state,
-    browser: ['Painel Mentes Prosperas', 'Chrome', '1.0.0'],
-  });
+  const socket = makeWASocket({ version, logger: pino({ level: 'silent' }) as any, printQRInTerminal: false, auth: state });
 
   socket.ev.on('creds.update', saveCreds);
-
   socket.ev.on('connection.update', (update) => {
-    const { connection, lastDisconnect, qr } = update;
+    const { connection, qr } = update;
     if (qr) qrCodeAtual = qr;
-
     if (connection === 'close') {
-      const statusCode = (lastDisconnect?.error as Boom)?.output?.statusCode;
-      qrCodeAtual = ''; 
-      if (statusCode !== DisconnectReason.loggedOut) iniciarRobo();
-    } else if (connection === 'open') {
-      qrCodeAtual = ''; 
-      console.log('🚀 SUCESSO ABSOLUTO! WhatsApp conectado e BLINDADO no MongoDB!');
-    }
+      if ((update.lastDisconnect?.error as Boom)?.output?.statusCode !== 401) iniciarRobo();
+    } else if (connection === 'open') { qrCodeAtual = ''; }
   });
 
   socket.ev.on('messages.upsert', async ({ messages, type }) => {
     if (type !== 'notify') return;
     const msg = messages[0];
-    
     if (!msg.key.fromMe && msg.message) {
-        const remoteJid = msg.key.remoteJid!;
-        const text = msg.message.conversation || 
-                     msg.message.extendedTextMessage?.text || 
-                     msg.message.ephemeralMessage?.message?.conversation || 
-                     msg.message.ephemeralMessage?.message?.extendedTextMessage?.text || 
-                     "";
+      const text = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").toLowerCase();
+      const remoteJid = msg.key.remoteJid!;
+      try {
+        const db = mongoClient.db('whatsapp_api');
+        // Procura no banco se a palavra que o cliente digitou existe nos seus fluxos
+        const config = await db.collection('fluxos').findOne({ gatilho: text.trim() });
 
-        const textoMinusculo = text.toLowerCase();
-        console.log(`📩 Mensagem de ${remoteJid}: "${text}"`);
-
-        // Funil Principal
-        if (textoMinusculo.includes('protocolo') || textoMinusculo.includes('ativar') || textoMinusculo.includes('identidade')) {
-            console.log(`🔥 Disparando Funil para: ${remoteJid}`);
-
+        if (config && config.mensagens) {
+          for (const msgTexto of config.mensagens) {
             await socket.sendPresenceUpdate('composing', remoteJid);
-            await new Promise(r => setTimeout(r, 2000));
-
-            await socket.sendMessage(remoteJid, {
-                text: "Opa! Que bom que você chamou. O que te espera aqui não é mais aula teórica, é um Protocolo de Ativação prático. 🚀"
-            });
-
-            await socket.sendPresenceUpdate('composing', remoteJid);
-            await new Promise(r => setTimeout(r, 3000));
-
-            await socket.sendMessage(remoteJid, {
-                text: "O *Protocolo de Identidade Real* é fundamentado em 5 estratégias estruturais que vão direto ao ponto.\n\nVocê já tentou aplicar algo prático assim antes ou é a sua primeira vez?"
-            });
+            await new Promise(r => setTimeout(r, 2000)); // Delay simulando digitação humana
+            await socket.sendMessage(remoteJid, { text: msgTexto });
+          }
         }
+      } catch (erro) { console.log('Erro no fluxo:', erro); }
     }
   });
 }
-
 iniciarRobo();
